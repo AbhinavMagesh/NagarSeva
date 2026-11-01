@@ -1,0 +1,19 @@
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_DB: nagarseva
+      POSTGRES_USER: nagarseva
+      POSTGRES_PASSWORD: nagarseva
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - nagarseva-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nagarseva -d nagarseva"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  nagarseva-postgres:
