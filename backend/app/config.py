@@ -6,9 +6,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://nagarseva:nagarseva@localhost:5432/nagarseva"
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-2.0-flash"
+    gemini_model: str = "gemini-2.5-flash"
     gemini_embedding_model: str = "gemini-embedding-001"
     sarvam_api_key: str = ""
+    gnani_api_key: str = ""
     openweathermap_api_key: str = ""
     cloudinary_cloud_name: str = ""
     cloudinary_api_key: str = ""

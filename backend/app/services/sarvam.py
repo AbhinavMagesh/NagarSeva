@@ -3,12 +3,40 @@ from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponen
 
 from app.config import settings
 
+SARVAM_STT_MODEL = "saaras:v3"
+SARVAM_ENGLISH_LANGUAGE_CODE = "en-IN"
+
 
 def _is_retryable(error: BaseException) -> bool:
     return isinstance(error, httpx.TransportError) or (
         isinstance(error, httpx.HTTPStatusError)
         and (error.response.status_code == 429 or error.response.status_code >= 500)
     )
+
+
+def _raise_for_status(response: httpx.Response, service: str) -> None:
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as error:
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = None
+
+        detail = None
+        if isinstance(payload, dict):
+            provider_error = payload.get("error")
+            if isinstance(provider_error, dict):
+                detail = provider_error.get("message")
+            elif isinstance(provider_error, str):
+                detail = provider_error
+            detail = detail or payload.get("message") or payload.get("detail")
+        detail = str(detail or response.text or "No error details returned by provider.")[:1000]
+        raise httpx.HTTPStatusError(
+            f"Sarvam {service} request failed: {error}. Provider response: {detail}",
+            request=error.request,
+            response=response,
+        ) from error
 
 
 class SarvamService:
@@ -26,15 +54,15 @@ class SarvamService:
                 "https://api.sarvam.ai/speech-to-text",
                 headers={"API-Subscription-Key": settings.sarvam_api_key},
                 files={"file": (filename, audio, mime_type)},
-                data={"model": "saaras:v2", "language_code": language or "unknown"},
+                data={"model": SARVAM_STT_MODEL, "language_code": language or "unknown"},
             )
-            response.raise_for_status()
+            _raise_for_status(response, "speech-to-text")
             result = response.json()
             transcript = result.get("transcript")
             source_language = result.get("language_code") or language
             if not transcript or not source_language:
                 raise RuntimeError("Sarvam did not return a transcript and detected language.")
-            if source_language == "en":
+            if source_language in {"en", SARVAM_ENGLISH_LANGUAGE_CODE}:
                 return {"transcript": transcript, "language": source_language, "translation": transcript}
             translation_response = await client.post(
                 "https://api.sarvam.ai/translate",
@@ -42,12 +70,12 @@ class SarvamService:
                 json={
                     "input": transcript,
                     "source_language_code": source_language,
-                    "target_language_code": "en",
+                    "target_language_code": SARVAM_ENGLISH_LANGUAGE_CODE,
                     "model": "mayura:v1",
                     "enable_preprocessing": True,
                 },
             )
-            translation_response.raise_for_status()
+            _raise_for_status(translation_response, "translation")
         translated = translation_response.json().get("translated_text")
         if not translated:
             raise RuntimeError("Sarvam did not return translated text.")
