@@ -17,6 +17,7 @@ export type Grievance = {
   sla_deadline: string | null;
   report_count: number;
   department: string | null;
+  assigned_authority_name: string | null;
   image_urls: string[];
   processing_error: string | null;
   created_at: string | null;

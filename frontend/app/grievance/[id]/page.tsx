@@ -6,6 +6,26 @@ import { useParams } from "next/navigation";
 import { api, formatDate, type Grievance, type TimelineItem } from "@/lib/api";
 import { getSocket } from "@/lib/socket";
 
+const pipelineStages = [
+  { id: "media_upload", title: "Media upload" },
+  { id: "transcription", title: "Voice transcription" },
+  { id: "intake", title: "Issue analysis" },
+  { id: "duplicate_check", title: "Duplicate check" },
+  { id: "severity", title: "Severity assessment" },
+  { id: "routing", title: "Department routing" },
+];
+
+function displayResult(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 export default function GrievancePage() {
   const params = useParams<{ id: string }>();
   const [item, setItem] = useState<Grievance | null>(null);
@@ -37,6 +57,22 @@ export default function GrievancePage() {
     return () => ["grievance_updated", "grievance_processed", "grievance_failed", "grievance_escalated", "grievance_processing"].forEach((event) => socket.off(event, update));
   }, [params.id, refresh]);
 
+  useEffect(() => {
+    if (item?.status !== "PROCESSING") return;
+    const interval = window.setInterval(() => void refresh(), 3000);
+    return () => window.clearInterval(interval);
+  }, [item?.status, refresh]);
+
+  const stageEvents = new Map<string, TimelineItem>();
+  timeline.filter((event) => event.action === "PIPELINE_STAGE").forEach((event) => {
+    if (typeof event.details.stage === "string") stageEvents.set(event.details.stage, event);
+  });
+  const hasVoiceStage = stageEvents.has("transcription");
+  const visibleStages = pipelineStages.filter((stage) => stage.id !== "transcription" || hasVoiceStage);
+  const currentStage = visibleStages.find((stage) => stageEvents.get(stage.id)?.details.status === "running");
+  const duplicateResult = stageEvents.get("duplicate_check")?.details.result;
+  const duplicateWasMerged = isRecord(duplicateResult) && duplicateResult.duplicate_found === true;
+
   async function verify(isResolved: boolean) {
     setLoading(true);
     setVerifyMessage("");
@@ -65,15 +101,33 @@ export default function GrievancePage() {
         <span className={`status-pill status-${item.status.toLowerCase()}`}>{item.status.replaceAll("_", " ")}</span>
       </section>
       {item.processing_error && <div className="error-banner">Report processing needs attention: {item.processing_error}</div>}
-      {item.status === "PROCESSING" && <div className="processing-banner"><span className="live-dot" /> Your report is being analyzed. This page updates automatically.</div>}
+      {item.status === "PROCESSING" && <div className="processing-banner"><span className="live-dot" /> {currentStage ? `${currentStage.title} in progress…` : "Your report is being analyzed. This page updates automatically."}</div>}
       {item.image_urls?.length > 0 && <div className="detail-images">{item.image_urls.map((url) => <a key={url} href={url} target="_blank" rel="noreferrer"><img src={url} alt="Citizen-submitted civic issue" /></a>)}</div>}
+      {(item.status === "PROCESSING" || stageEvents.size > 0) && <section className="panel pipeline-panel">
+        <div className="panel-title"><span>{item.status === "PROCESSING" ? "LIVE PROCESSING PIPELINE" : "PROCESSING RESULTS"}</span><span className="panel-index">LIVE</span></div>
+        <div className="pipeline-steps">{visibleStages.map((stage, index) => {
+          const event = stageEvents.get(stage.id);
+          const status = typeof event?.details.status === "string" ? event.details.status : "pending";
+          const result = event?.details.result;
+          const resultFields = isRecord(result) ? Object.entries(result) : [];
+          const skipped = !event && duplicateWasMerged && (stage.id === "severity" || stage.id === "routing");
+          return <article className={`pipeline-step pipeline-${skipped ? "skipped" : status}`} key={stage.id}>
+            <span className="pipeline-step-number">{index + 1}</span>
+            <div className="pipeline-step-content">
+              <div className="pipeline-step-heading"><strong>{stage.title}</strong><span>{skipped ? "Skipped — duplicate merged" : status === "pending" ? "Waiting" : status.replaceAll("_", " ")}</span></div>
+              {resultFields.length > 0 && <dl className="pipeline-result">{resultFields.map(([key, value]) => <div key={key}><dt>{key.replaceAll("_", " ")}</dt><dd>{displayResult(value)}</dd></div>)}</dl>}
+            </div>
+          </article>;
+        })}</div>
+      </section>}
       <div className="detail-grid">
         <section className="panel detail-main">
           <div className="panel-title"><span>TRIAGE ASSESSMENT</span><span className="panel-index">A</span></div>
-          <div className="severity-score"><strong>{item.severity_score ? item.severity_score.toFixed(1) : "—"}</strong><span>/ 10<br /><b>{item.severity_label}</b></span></div>
+          <div className="severity-score"><strong>{item.severity_score > 0 ? item.severity_score.toFixed(1) : "—"}</strong><span>/ 10<br /><b>{item.severity_label}</b></span></div>
           <p className="detail-explanation">{item.severity_explanation ?? "A severity assessment will appear here after analysis."}</p>
           <div className="detail-meta"><span>Category</span><strong>{item.category.replaceAll("_", " ")}</strong></div>
           <div className="detail-meta"><span>Responsible department</span><strong>{item.department ?? "Pending triage"}</strong></div>
+          <div className="detail-meta"><span>Assigned officer</span><strong>{item.assigned_authority_name ?? (item.department ? "Department queue" : "Pending assignment")}</strong></div>
           <div className="detail-meta"><span>Location</span><strong>{item.address ?? "Location pending"}</strong></div>
           <div className="detail-meta"><span>Community reports</span><strong>{item.report_count}</strong></div>
           {item.sla_deadline && <div className="detail-meta"><span>Target response date</span><strong>{formatDate(item.sla_deadline)}</strong></div>}
@@ -101,4 +155,3 @@ export default function GrievancePage() {
     </div>
   );
 }
-
